@@ -5,9 +5,10 @@ const socket = io(window.location.origin, {
 });
 
 let myId = '';
-let myRole = ''; // 'player' หรือ 'dealer'
+let myRole = '';
 let currentRoom = '';
-let currentBet = 0;
+let currentBet = 0; // เงินที่เลือกจะเพิ่ม (Raise)
+let myRoundBet = 0; // เงินที่เราลงไปแล้วในรอบนี้
 
 socket.on('connect', () => {
     myId = socket.id;
@@ -16,7 +17,7 @@ socket.on('connect', () => {
 
 socket.on('room_created', (data) => {
     currentRoom = data.roomId;
-    myRole = 'dealer'; // คนสร้างห้องเป็น Dealer
+    myRole = 'dealer';
     showScreen('lobby-screen');
     document.getElementById('display-room-id').innerText = currentRoom;
     document.getElementById('host-controls').classList.remove('hidden');
@@ -24,7 +25,7 @@ socket.on('room_created', (data) => {
 
 socket.on('room_joined', (data) => {
     currentRoom = data.roomId;
-    myRole = 'player'; // คน join เป็นคนเล่น
+    myRole = 'player';
     showScreen('lobby-screen');
     document.getElementById('display-room-id').innerText = currentRoom;
 });
@@ -36,12 +37,10 @@ socket.on('update_players', (players) => {
     winnerSelect.innerHTML = '';
 
     players.forEach(p => {
-        // แสดงรายชื่อใน Lobby
         const li = document.createElement('li');
         li.innerText = p.name + (p.role === 'dealer' ? ' (Dealer)' : '');
         list.appendChild(li);
 
-        // ใส่ชื่อใน list ผู้ชนะ (เฉพาะ Player)
         if(p.role === 'player') {
             const opt = document.createElement('option');
             opt.value = p.id;
@@ -54,38 +53,68 @@ socket.on('update_players', (players) => {
 socket.on('game_started', (data) => {
     showScreen('game-screen');
     resetBoardUI();
+    myRoundBet = 0;
 
-    // ตั้งค่าหน้าจอตาม Role
     if (myRole === 'dealer') {
-        document.getElementById('player-controls').classList.add('hidden'); // Dealer ไม่เห็นปุ่มลงเงิน
-        document.getElementById('dealer-controls').classList.remove('hidden'); // Dealer เห็นปุ่มจบเกม
+        document.getElementById('player-controls').classList.add('hidden');
+        document.getElementById('dealer-controls').classList.remove('hidden');
     } else {
         document.getElementById('player-controls').classList.remove('hidden');
         document.getElementById('dealer-controls').classList.add('hidden');
     }
 
-    // แจ้งเตือน Big Blind
     const bbName = data.players.find(p => p.id === data.bigBlindId)?.name || "Unknown";
     showBigBlindAlert(bbName);
-
-    // อัปเดตสถานะเทิร์นครั้งแรก
     updateTurnUI(data.turnIndex, data.players);
 });
 
 socket.on('update_game_state', (data) => {
+    // อัปเดตยอด Pot
     document.getElementById('pot-amount').innerText = data.pot;
     
-    // แสดงข้อความแจ้งเตือน (ใครทำอะไรล่าสุด)
+    // แจ้งเตือนข้อความการกระทำ
     if(data.lastActionMsg) {
         document.getElementById('action-log').innerText = data.lastActionMsg;
-        // Effect ตัวหนังสือเด้ง
         const log = document.getElementById('action-log');
         log.style.transform = "scale(1.1)";
         setTimeout(() => log.style.transform = "scale(1)", 200);
     }
 
-    // อัปเดตว่าตาใคร
-    // เราต้องขอรายชื่อ Player ล่าสุดเพื่อ mapping id แต่ในที่นี้เราใช้ id เช็คตรงๆ
+    // --- Logic ปุ่ม "ตาม" (Call) ---
+    if(myRole === 'player') {
+        // หาข้อมูลตัวเองจาก playersData ที่ส่งมา
+        const me = data.playersData.find(p => p.id === myId);
+        if (me) {
+            myRoundBet = me.roundBet; // อัปเดตยอดเงินที่ลงไปแล้วจริงๆ จาก Server
+        }
+
+        const highestBet = data.highestBet;
+        const diff = highestBet - myRoundBet;
+
+        const btnCheck = document.getElementById('btn-check');
+        const btnCall = document.getElementById('btn-call');
+        const callAmountDisplay = document.getElementById('call-amount-display');
+
+        if (diff > 0) {
+            // ถ้ามีคนลงมากกว่าเรา -> ต้อง "ตาม" (Call)
+            btnCheck.classList.add('hidden');
+            btnCall.classList.remove('hidden');
+            callAmountDisplay.innerText = `(${diff})`;
+        } else {
+            // ถ้าไม่มีใครลงมากกว่า -> "ผ่าน" (Check) ได้
+            btnCheck.classList.remove('hidden');
+            btnCall.classList.add('hidden');
+        }
+    }
+
+    // --- แจ้งเตือน Dealer (ให้เปิดไพ่) ---
+    if (myRole === 'dealer' && data.dealerAlert) {
+        const alertBox = document.getElementById('dealer-alert-box');
+        alertBox.classList.remove('hidden');
+        // ซ่อนอัตโนมัติหลัง 5 วิ
+        setTimeout(() => alertBox.classList.add('hidden'), 5000);
+    }
+
     checkMyTurn(data.currentTurn);
 });
 
@@ -103,16 +132,44 @@ socket.on('update_board', (cards) => {
 });
 
 socket.on('game_over', (data) => {
+    // บังคับโชว์หน้า Payment ทันที
     showScreen('payment-screen');
-    document.getElementById('win-amount').innerText = data.pot;
-    // (ส่วนแสดงชื่อผู้ชนะยังเหมือนเดิม)
-    // ... logic payment เดิม ...
-    if(isHost()) document.getElementById('reset-btn').classList.remove('hidden');
+    
+    // ซ่อน Game Screen เพื่อไม่ให้สับสน
+    document.getElementById('game-screen').classList.add('hidden');
+
+    const winAmountSpan = document.getElementById('win-amount');
+    const winnerNameSpan = document.getElementById('winner-name-display');
+    const winnerView = document.getElementById('winner-view');
+    const loserView = document.getElementById('loser-view');
+    const resetBtn = document.getElementById('reset-btn');
+
+    // แสดงยอดเงิน
+    winAmountSpan.innerText = data.pot;
+
+    if(myId === data.winnerId) {
+        // ถ้าเราชนะ
+        winnerView.classList.remove('hidden');
+        loserView.classList.add('hidden');
+    } else {
+        // ถ้าเราแพ้ (ต้องหาชื่อผู้ชนะมาแสดง)
+        // เนื่องจาก data.winnerId เป็น ID เราต้องหาชื่อ (แต่ server ส่งมาแค่ ID ในรอบนี้ เพื่อความง่ายจะแสดง ID หรือต้องแก้ Server ให้ส่งชื่อมาด้วย)
+        // **แก้ไขด่วน:** ให้แสดงแค่ "ผู้เล่นอื่นชนะ" หรือ ID ไปก่อน
+        winnerNameSpan.innerText = "ผู้เล่นอื่น (ID: " + data.winnerId.substr(0,4) + ")"; 
+        
+        winnerView.classList.add('hidden');
+        loserView.classList.remove('hidden');
+    }
+
+    // ปุ่ม Reset ให้เฉพาะ Dealer เห็น
+    if(isHost()) {
+        resetBtn.classList.remove('hidden');
+    } else {
+        resetBtn.classList.add('hidden');
+    }
 });
 
 socket.on('reset_to_lobby', () => {
-    // กลับไปหน้า Lobby เตรียมเริ่มใหม่
-    // แต่เพื่อความง่าย ให้กลับไปหน้า Lobby เลย
     showScreen('lobby-screen');
     document.getElementById('payment-screen').classList.add('hidden');
 });
@@ -131,11 +188,11 @@ function checkMyTurn(currentTurnId) {
     if (currentTurnId === myId) {
         turnText.innerText = "🟢 ตาของคุณ! (Your Turn)";
         turnText.style.color = "#2ecc71";
-        controls.classList.remove('disabled-controls'); // ปลดล็อคปุ่ม
+        controls.classList.remove('disabled-controls');
     } else {
         turnText.innerText = "🔴 รอเพื่อนเล่น...";
         turnText.style.color = "#e74c3c";
-        controls.classList.add('disabled-controls'); // ล็อคปุ่ม
+        controls.classList.add('disabled-controls');
     }
 }
 
@@ -159,10 +216,6 @@ function showScreen(id) {
     document.getElementById(id).classList.remove('hidden');
 }
 
-// ... (Function เดิม: createRoom, joinRoom, dealerClickCard, etc. ยังคงเดิม) ...
-// ให้ Copy Function เดิมที่เหลือมาใส่ต่อท้ายตรงนี้ได้เลยครับ 
-// (เช่น createRoom, joinRoom, startGame, selectChip, submitAction, confirmCard, etc.)
-
 function createRoom() {
     const name = document.getElementById('username').value;
     if(!name) return alert("ใส่ชื่อก่อนครับ");
@@ -180,25 +233,34 @@ function startGame() { socket.emit('start_game', currentRoom); }
 
 function selectChip(amt) {
     currentBet += amt;
-    document.getElementById('selected-bet').innerText = "ยอดที่เลือก: " + currentBet;
+    document.getElementById('selected-bet').innerText = "ยอดที่เพิ่ม: " + currentBet;
 }
 
 function submitAction(action) {
     let amount = 0;
-    if(action === 'bet') amount = currentBet;
     
+    // ถ้า Raise (ลงเพิ่ม) ให้ใช้ยอด currentBet
+    if(action === 'bet') {
+        if(currentBet === 0) return alert("กรุณาเลือกชิปก่อนลงเงินเพิ่ม");
+        amount = currentBet;
+    }
+    
+    // ถ้า Call (ตาม) ระบบ Server จะคำนวณส่วนต่างเอง เราส่งแค่ action
+    // ถ้า Check / Fold ไม่ต้องส่ง amount
+
     socket.emit('place_bet', { roomId: currentRoom, amount, action });
     
     currentBet = 0;
-    document.getElementById('selected-bet').innerText = "ยอดที่เลือก: 0";
+    document.getElementById('selected-bet').innerText = "ยอดที่เพิ่ม: 0";
 }
 
-// Dealer Functions
 let currentCardIndex = -1;
 function dealerClickCard(index) {
-    if(myRole !== 'dealer') return; // กันคนอื่นกด
+    if(myRole !== 'dealer') return;
     currentCardIndex = index;
     document.getElementById('card-modal').classList.remove('hidden');
+    // ซ่อนแจ้งเตือน (ถ้ามี)
+    document.getElementById('dealer-alert-box').classList.add('hidden');
 }
 
 function confirmCard() {
@@ -219,10 +281,12 @@ function resetGame() { socket.emit('reset_game', currentRoom); }
 function resetBoardUI() {
     document.getElementById('pot-amount').innerText = "0";
     document.querySelectorAll('.card-slot').forEach(s => { s.innerText = "?"; s.className = "card-slot"; });
+    document.getElementById('dealer-alert-box').classList.add('hidden');
 }
 function generateQR() {
-    // ใส่โค้ด generate QR เดิมที่นี่
     const ppId = document.getElementById('pp-id').value;
-    const url = `https://promptpay.io/${ppId}/0.png`; 
-    document.getElementById('qr-display').innerHTML = `<img src="${url}" width="200">`;
+    const amount = document.getElementById('win-amount').innerText; // ดึงยอดเงินจริง
+    const url = `https://promptpay.io/${ppId}/${amount}.png`; // สร้าง QR ตามยอดเงินจริง
+    
+    document.getElementById('qr-display').innerHTML = `<img src="${url}" width="200" style="border:5px solid white; border-radius:10px;">`;
 }
