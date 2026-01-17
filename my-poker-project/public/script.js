@@ -11,7 +11,12 @@ let myRoundBet = 0;
 
 socket.on('connect', () => { myId = socket.id; });
 
-// --- Lobby & Room Setup ---
+// โดนเตะออกจากห้อง
+socket.on('kicked', () => {
+    alert("คุณถูกเชิญออกจากห้อง (Kicked)");
+    location.reload(); // รีเฟรชหน้าเว็บ
+});
+
 socket.on('room_created', (data) => {
     currentRoom = data.roomId;
     myRole = 'dealer';
@@ -35,10 +40,23 @@ socket.on('update_players', (players) => {
 
     players.forEach(p => {
         const li = document.createElement('li');
-        li.innerHTML = `<span style="color:${p.role === 'dealer' ? '#f1c40f' : 'white'}">
-            ${p.name} ${p.role === 'dealer' ? '👑' : ''}
-        </span>`;
         li.style.padding = "5px 0";
+        li.style.display = "flex";
+        li.style.justifyContent = "space-between";
+        li.style.alignItems = "center";
+        
+        let kickBtn = '';
+        // ถ้าเราเป็น Dealer และคนนี้ไม่ใช่ Dealer -> โชว์ปุ่มเตะ
+        if (myRole === 'dealer' && p.role !== 'dealer') {
+            kickBtn = `<button onclick="kickPlayer('${p.id}')" style="background:#c0392b; border:none; color:white; padding:5px 10px; border-radius:5px; cursor:pointer; font-size:12px; margin-left:10px;">❌ เตะ</button>`;
+        }
+
+        li.innerHTML = `
+            <span style="color:${p.role === 'dealer' ? '#f1c40f' : 'white'}">
+                ${p.name} ${p.role === 'dealer' ? '👑' : ''}
+            </span>
+            ${kickBtn}
+        `;
         list.appendChild(li);
 
         if(p.role === 'player') {
@@ -50,7 +68,6 @@ socket.on('update_players', (players) => {
     });
 });
 
-// --- Game Logic ---
 socket.on('game_started', (data) => {
     showScreen('game-screen');
     resetBoardUI();
@@ -70,7 +87,8 @@ socket.on('game_started', (data) => {
     overlay.classList.remove('hidden');
     setTimeout(() => overlay.classList.add('hidden'), 3000);
 
-    updateTurnUI(data.turnIndex, data.players);
+    // อัปเดตเทิร์นแรกทันที
+    checkMyTurn(data.players[data.turnIndex].id);
 });
 
 socket.on('update_game_state', (data) => {
@@ -80,7 +98,6 @@ socket.on('update_game_state', (data) => {
         document.getElementById('action-log').innerText = data.lastActionMsg;
     }
 
-    // Call Button Logic
     if(myRole === 'player') {
         const me = data.playersData.find(p => p.id === myId);
         if (me) myRoundBet = me.roundBet;
@@ -99,12 +116,12 @@ socket.on('update_game_state', (data) => {
         }
     }
 
-    // Dealer Alert
     if (myRole === 'dealer' && data.dealerAlert) {
         document.getElementById('dealer-alert-box').classList.remove('hidden');
         setTimeout(() => document.getElementById('dealer-alert-box').classList.add('hidden'), 5000);
     }
 
+    // สำคัญ: รับค่า currentTurn มาเช็คเพื่อปลดล็อคปุ่ม
     checkMyTurn(data.currentTurn);
 });
 
@@ -121,7 +138,6 @@ socket.on('update_board', (cards) => {
     });
 });
 
-// --- End Game & Payment ---
 socket.on('game_over', (data) => {
     showScreen('payment-screen');
     document.getElementById('game-screen').classList.add('hidden');
@@ -131,15 +147,11 @@ socket.on('game_over', (data) => {
     document.getElementById('winner-name-display').innerText = winnerName;
 
     if(myId === data.winnerId) {
-        // คนชนะ
         document.getElementById('winner-view').classList.remove('hidden');
         document.getElementById('loser-view').classList.add('hidden');
     } else {
-        // คนแพ้
         document.getElementById('winner-view').classList.add('hidden');
         document.getElementById('loser-view').classList.remove('hidden');
-        
-        // หาว่าตัวเองเสียไปเท่าไหร่
         const myData = data.playersData.find(p => p.id === myId);
         const lostAmount = myData ? myData.totalBet : 0;
         document.getElementById('my-loss-amount').innerText = lostAmount;
@@ -152,12 +164,19 @@ socket.on('game_over', (data) => {
 socket.on('reset_to_lobby', () => {
     showScreen('lobby-screen');
     document.getElementById('payment-screen').classList.add('hidden');
-    // Reset inputs
     document.getElementById('qr-display').innerHTML = '';
     document.getElementById('pp-id').value = '';
 });
 
-// --- Actions ---
+// --- Functions ---
+
+// ฟังก์ชันเตะคน
+function kickPlayer(targetId) {
+    if(confirm("ต้องการเตะผู้เล่นคนนี้ออกจากห้องหรือไม่?")) {
+        socket.emit('kick_player', { roomId: currentRoom, targetId: targetId });
+    }
+}
+
 function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
     document.getElementById(id).classList.remove('hidden');
@@ -194,7 +213,6 @@ function submitAction(action) {
     document.getElementById('selected-bet').innerText = "ยอดที่จะเพิ่ม: 0";
 }
 
-// Dealer UI
 let currentCardIndex = -1;
 function dealerClickCard(index) {
     if(myRole !== 'dealer') return;
@@ -209,7 +227,6 @@ function confirmCard() {
     closeModal('card-modal');
 }
 
-// Utils
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 function openWinnerModal() { document.getElementById('winner-modal').classList.remove('hidden'); }
 function confirmWinner() {
@@ -218,11 +235,13 @@ function confirmWinner() {
     closeModal('winner-modal');
 }
 function resetGame() { socket.emit('reset_game', currentRoom); }
+
 function checkMyTurn(turnId) {
     const controls = document.getElementById('player-controls');
     const indicator = document.getElementById('turn-indicator');
     if(myRole === 'dealer') { indicator.innerText = "กำลังเล่น..."; return; }
     
+    // ถ้า ID ตรงกับเรา -> ปลดล็อค
     if(turnId === myId) {
         controls.classList.remove('disabled');
         indicator.innerText = "🟢 ตาของคุณ!";
@@ -233,17 +252,13 @@ function checkMyTurn(turnId) {
         indicator.style.color = "#e74c3c";
     }
 }
-function updateTurnUI(idx, players) { if(idx !== -1) checkMyTurn(players[idx].id); }
 function resetBoardUI() {
     document.getElementById('pot-amount').innerText = "0";
     document.querySelectorAll('.card-slot').forEach(s => { s.innerText = "?"; s.className = "card-slot"; });
 }
-
-// QR Code Logic (Updated: Amount = 0)
 function generateQR() {
     const ppId = document.getElementById('pp-id').value;
     if(!ppId) return alert("ใส่เบอร์ PromptPay ก่อนครับ");
-    // URL ลงท้ายด้วย /0 เพื่อให้ยอดเป็น 0.00
     const url = `https://promptpay.io/${ppId}/0.png`; 
     document.getElementById('qr-display').innerHTML = 
         `<img src="${url}" width="200" style="border:5px solid white; border-radius:10px;">
