@@ -13,18 +13,18 @@ rooms = {}
 def index():
     return app.send_static_file('index.html')
 
-# Helper: หาคนเล่นคนถัดไป (ข้าม Dealer และ คนหมอบ)
 def get_next_turn(room, current_idx):
     players = room['players']
     count = len(players)
-    next_idx = (current_idx + 1) % count
+    if count == 0: return -1
     
-    # วนลูปหาคนถัดไปที่สถานะ active และไม่ใช่ dealer
-    # ป้องกัน Infinite loop ด้วยการเช็คว่าวนกลับมาที่เดิมไหม
+    next_idx = (current_idx + 1) % count
     start_idx = next_idx
+    
+    # วนหาคนถัดไปที่ไม่ใช่ Dealer และยังไม่หมอบ
     while players[next_idx]['status'] == 'folded' or players[next_idx]['role'] == 'dealer':
         next_idx = (next_idx + 1) % count
-        if next_idx == start_idx: # กรณีเหลือคนเดียว หรือไม่มีใครเล่นได้
+        if next_idx == start_idx: 
             return -1 
             
     return next_idx
@@ -39,18 +39,19 @@ def create_room(data):
         'communityCards': [None]*5,
         'gameStatus': 'waiting',
         'turnIndex': -1,
-        'bigBlindPlayer': None
+        'bigBlindPlayer': None,
+        'highestBet': 0,      # เก็บยอดเดิมพันสูงสุดในรอบ
+        'actionsCount': 0     # นับจำนวนคนเล่นในรอบนี้
     }
     join_room(room_id)
-    # Host คือ Dealer (status: 'dealer_only') ไม่นับว่าเป็นผู้เล่นที่ลงเงินได้
     rooms[room_id]['players'].append({
         'id': request.sid,
         'name': data['name'],
         'role': 'dealer',
         'status': 'dealer_only', 
-        'chip': 0
+        'chip': 0,
+        'roundBet': 0 # เงินที่ลงในรอบนี้
     })
-    
     emit('room_created', {'roomId': room_id, 'isHost': True})
     socketio.emit('update_players', rooms[room_id]['players'], room=room_id)
 
@@ -59,13 +60,13 @@ def on_join(data):
     room_id = data['roomId']
     if room_id in rooms:
         join_room(room_id)
-        # คน join คือ Player (status: 'active')
         rooms[room_id]['players'].append({
             'id': request.sid,
             'name': data['name'],
             'role': 'player',
             'status': 'active',
-            'chip': 0
+            'chip': 0,
+            'roundBet': 0
         })
         emit('room_joined', {'roomId': room_id, 'isHost': False})
         socketio.emit('update_players', rooms[room_id]['players'], room=room_id)
@@ -79,25 +80,22 @@ def start_game(room_id):
     
     players = room['players']
     active_players = [p for p in players if p['role'] == 'player']
-    
-    if len(active_players) < 2:
-        return # ต้องมีผู้เล่นอย่างน้อย 2 คน (ไม่รวม Dealer)
+    if len(active_players) < 2: return 
 
-    # Reset Status ของผู้เล่นทุกคนให้เป็น active
     for p in players:
         if p['role'] == 'player':
             p['status'] = 'active'
+            p['roundBet'] = 0
 
-    # สุ่ม Big Blind จากคนที่เป็น Player เท่านั้น
     bb_player = random.choice(active_players)
     room['bigBlindPlayer'] = bb_player['id']
-    
-    # หา Index ของ Big Blind ใน list หลัก
     bb_index = next((i for i, p in enumerate(players) if p['id'] == bb_player['id']), 0)
     
     room['turnIndex'] = bb_index
     room['gameStatus'] = 'playing'
     room['pot'] = 0
+    room['highestBet'] = 0 # เริ่มต้นไม่มีใครลงเงิน
+    room['actionsCount'] = 0 
     room['communityCards'] = [None]*5
     
     socketio.emit('game_started', {
@@ -114,40 +112,67 @@ def place_bet(data):
     room = rooms[room_id]
     current_player = room['players'][room['turnIndex']]
 
-    # 1. เช็คว่าใช่ตาตัวเองจริงๆ ไหม (Server Validation)
-    if request.sid != current_player['id']:
-        return # ถ้าไม่ใช่ตาตัวเอง อย่าทำอะไร
+    if request.sid != current_player['id']: return
 
     amount = int(data['amount'])
     action = data['action']
     
-    # Update Pot
-    if amount > 0:
-        room['pot'] += amount
-
-    # Handle Actions
     msg = ""
+    
+    # Logic การลงเงิน
     if action == 'fold':
         current_player['status'] = 'folded'
-        msg = f"{current_player['name']} หมอบแล้ว (Fold) 🏳️"
+        msg = f"{current_player['name']} หมอบ (Fold) 🏳️"
+    
     elif action == 'check':
         msg = f"{current_player['name']} ผ่าน (Check)"
-    elif action == 'bet':
-        msg = f"{current_player['name']} ลงเงิน {amount} ชิป 💰"
+    
+    elif action == 'call':
+        # "ตาม" คือต้องลงเงินเพิ่มให้เท่ากับ highestBet
+        diff = room['highestBet'] - current_player['roundBet']
+        if diff > 0:
+            room['pot'] += diff
+            current_player['roundBet'] += diff
+            amount = diff # ส่งกลับไปบอกว่าลงจริงเท่าไหร่
+        msg = f"{current_player['name']} ตาม (Call) {amount} 💰"
 
-    # หาตาคนถัดไป
+    elif action == 'bet':
+        # ลงเงินเพิ่ม (Raise)
+        room['pot'] += amount
+        current_player['roundBet'] += amount
+        
+        # อัปเดตยอดสูงสุดของห้อง
+        if current_player['roundBet'] > room['highestBet']:
+            room['highestBet'] = current_player['roundBet']
+            
+        msg = f"{current_player['name']} ลงเงินเพิ่ม {amount} 💰"
+
+    # นับจำนวนคนเล่น
+    room['actionsCount'] += 1
+    active_players_count = len([p for p in room['players'] if p['role'] == 'player' and p['status'] != 'folded'])
+
+    # หาคนถัดไป
     next_idx = get_next_turn(room, room['turnIndex'])
     if next_idx != -1:
         room['turnIndex'] = next_idx
         next_id = room['players'][next_idx]['id']
     else:
-        # กรณีเหลือคนเดียวชนะเลย (อาจจะเพิ่ม logic นี้ทีหลัง)
         next_id = None
+
+    # เช็คว่าควรเตือน Dealer ไหม (เล่นครบทุกคนในรอบ หรือ วนมาครบ)
+    # Logic ง่ายๆ: ถ้านับจำนวนครั้งที่เล่น >= จำนวนคนเล่นที่เหลืออยู่ แสดงว่าน่าจะครบแล้ว
+    dealer_alert = False
+    if room['actionsCount'] >= active_players_count:
+        dealer_alert = True
+        room['actionsCount'] = 0 # รีเซ็ตนับรอบใหม่ (สำหรับการเปิดไพ่ใบต่อไป)
 
     socketio.emit('update_game_state', {
         'pot': room['pot'],
         'lastActionMsg': msg,
-        'currentTurn': next_id
+        'currentTurn': next_id,
+        'highestBet': room['highestBet'], # ส่งค่าเดิมพันสูงสุดไปให้หน้าเว็บคำนวณปุ่ม "ตาม"
+        'dealerAlert': dealer_alert,       # ส่งสัญญาณเตือน Dealer
+        'playersData': room['players']     # ส่งข้อมูลผู้เล่น (เพื่อเช็คว่าใครลงไปเท่าไหร่แล้ว)
     }, room=room_id)
 
 @socketio.on('update_card')
@@ -155,6 +180,8 @@ def update_card(data):
     room_id = data['roomId']
     if room_id in rooms:
         rooms[room_id]['communityCards'][data['cardIndex']] = data['cardData']
+        # พอ Dealer เปิดไพ่ ให้รีเซ็ตยอดเดิมพันรอบใหม่ (optional: ตามกติกา Poker จริง)
+        # แต่เอาแบบง่ายๆ คือแค่แสดงผล
         socketio.emit('update_board', rooms[room_id]['communityCards'], room=room_id)
 
 @socketio.on('end_game')
@@ -169,7 +196,10 @@ def end_game(data):
 @socketio.on('reset_game')
 def reset_game(room_id):
     if room_id in rooms:
+        # Reset ค่าต่างๆ
         rooms[room_id]['pot'] = 0
+        rooms[room_id]['highestBet'] = 0
+        rooms[room_id]['actionsCount'] = 0
         rooms[room_id]['communityCards'] = [None]*5
         rooms[room_id]['gameStatus'] = 'waiting'
         socketio.emit('reset_to_lobby', room=room_id)
