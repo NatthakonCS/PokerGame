@@ -1,4 +1,5 @@
-const socket = io();
+// แก้จาก const socket = io(); เป็นบรรทัดข้างล่างนี้:
+const socket = io({transports: ['websocket'], upgrade: false});
 
 let myId = '';
 let myName = '';
