@@ -6,17 +6,19 @@ const socket = io(window.location.origin, {
 let myId = '';
 let myRole = '';
 let currentRoom = '';
-let currentBet = 0;
-let myRoundBet = 0;
+let currentBet = 0;   // เงินที่เราเลือกในมือตอนนี้ (ที่กดจากชิป)
+let myRoundBet = 0;   // เงินที่เราลงไปแล้วจริงๆ ในรอบนี้ (บนโต๊ะ)
+let roomHighestBet = 0; // ยอดเดิมพันสูงสุดของห้อง ณ ตอนนี้ (เพิ่มตัวนี้มาช่วยจำ)
 
 socket.on('connect', () => { myId = socket.id; });
 
-// โดนเตะออกจากห้อง
+// --- Kick Event ---
 socket.on('kicked', () => {
     alert("คุณถูกเชิญออกจากห้อง (Kicked)");
-    location.reload(); // รีเฟรชหน้าเว็บ
+    location.reload();
 });
 
+// --- Room Setup ---
 socket.on('room_created', (data) => {
     currentRoom = data.roomId;
     myRole = 'dealer';
@@ -46,7 +48,6 @@ socket.on('update_players', (players) => {
         li.style.alignItems = "center";
         
         let kickBtn = '';
-        // ถ้าเราเป็น Dealer และคนนี้ไม่ใช่ Dealer -> โชว์ปุ่มเตะ
         if (myRole === 'dealer' && p.role !== 'dealer') {
             kickBtn = `<button onclick="kickPlayer('${p.id}')" style="background:#c0392b; border:none; color:white; padding:5px 10px; border-radius:5px; cursor:pointer; font-size:12px; margin-left:10px;">❌ เตะ</button>`;
         }
@@ -68,10 +69,12 @@ socket.on('update_players', (players) => {
     });
 });
 
+// --- Game Logic ---
 socket.on('game_started', (data) => {
     showScreen('game-screen');
     resetBoardUI();
     myRoundBet = 0;
+    roomHighestBet = 0;
 
     if (myRole === 'dealer') {
         document.getElementById('player-controls').classList.add('hidden');
@@ -87,30 +90,36 @@ socket.on('game_started', (data) => {
     overlay.classList.remove('hidden');
     setTimeout(() => overlay.classList.add('hidden'), 3000);
 
-    // อัปเดตเทิร์นแรกทันที
     checkMyTurn(data.players[data.turnIndex].id);
 });
 
 socket.on('update_game_state', (data) => {
     document.getElementById('pot-amount').innerText = data.pot;
     
+    // อัปเดตตัวแปรสำคัญ
+    roomHighestBet = data.highestBet;
+
     if(data.lastActionMsg) {
         document.getElementById('action-log').innerText = data.lastActionMsg;
     }
 
     if(myRole === 'player') {
+        // อัปเดตยอดเงินที่เราลงไปแล้ว
         const me = data.playersData.find(p => p.id === myId);
         if (me) myRoundBet = me.roundBet;
 
-        const diff = data.highestBet - myRoundBet;
+        // คำนวณส่วนต่างเพื่อแสดงปุ่ม
+        const diff = roomHighestBet - myRoundBet;
         const btnCheck = document.getElementById('btn-check');
         const btnCall = document.getElementById('btn-call');
 
+        // ถ้ามีคนลงมากกว่าเรา (diff > 0) -> ต้อง Call หรือ Raise เท่านั้น (Check ไม่ได้)
         if (diff > 0) {
             btnCheck.classList.add('hidden');
             btnCall.classList.remove('hidden');
             btnCall.innerText = `ตาม (${diff})`;
         } else {
+            // ถ้าเท่ากันแล้ว -> Check ได้
             btnCheck.classList.remove('hidden');
             btnCall.classList.add('hidden');
         }
@@ -121,7 +130,6 @@ socket.on('update_game_state', (data) => {
         setTimeout(() => document.getElementById('dealer-alert-box').classList.add('hidden'), 5000);
     }
 
-    // สำคัญ: รับค่า currentTurn มาเช็คเพื่อปลดล็อคปุ่ม
     checkMyTurn(data.currentTurn);
 });
 
@@ -166,11 +174,14 @@ socket.on('reset_to_lobby', () => {
     document.getElementById('payment-screen').classList.add('hidden');
     document.getElementById('qr-display').innerHTML = '';
     document.getElementById('pp-id').value = '';
+    // Reset local vars
+    myRoundBet = 0;
+    roomHighestBet = 0;
+    currentBet = 0;
 });
 
 // --- Functions ---
 
-// ฟังก์ชันเตะคน
 function kickPlayer(targetId) {
     if(confirm("ต้องการเตะผู้เล่นคนนี้ออกจากห้องหรือไม่?")) {
         socket.emit('kick_player', { roomId: currentRoom, targetId: targetId });
@@ -202,13 +213,30 @@ function selectChip(amt) {
     document.getElementById('selected-bet').innerText = "ยอดที่จะเพิ่ม: " + currentBet;
 }
 
+// 🔥🔥 แก้ไขจุดสำคัญตรงนี้ครับ 🔥🔥
 function submitAction(action) {
     let amount = 0;
+    
     if(action === 'bet') {
-        if(currentBet === 0) return alert("เลือกชิปก่อนครับ");
+        if(currentBet === 0) return alert("กรุณาเลือกชิปก่อนลงเงินเพิ่ม");
+        
+        // คำนวณยอดรวมใหม่ (ของเก่าที่ลงไปแล้ว + ชิปที่กำอยู่ในมือ)
+        let totalAfterBet = myRoundBet + currentBet;
+        
+        // กฎ: ถ้ามีคนลงไว้แล้ว (HighestBet > 0) เราต้องลงให้ "มากกว่า" ถึงจะเรียกว่า Raise
+        // (ถ้าลงเท่ากัน มันคือ Call ซึ่งต้องกดปุ่ม Call)
+        if (roomHighestBet > 0 && totalAfterBet <= roomHighestBet) {
+            alert(`⚠️ ผิดกติกา!\nยอดเดิมพันสูงสุดตอนนี้คือ ${roomHighestBet}\nคุณต้องลงรวมให้มากกว่านั้น (ตอนนี้รวมได้แค่ ${totalAfterBet})`);
+            return; // หยุดทำงาน ไม่ส่งไป Server
+        }
+        
         amount = currentBet;
     }
+    
+    // ส่งข้อมูลไป Server
     socket.emit('place_bet', { roomId: currentRoom, amount, action });
+    
+    // Reset ชิปในมือ
     currentBet = 0;
     document.getElementById('selected-bet').innerText = "ยอดที่จะเพิ่ม: 0";
 }
@@ -241,7 +269,6 @@ function checkMyTurn(turnId) {
     const indicator = document.getElementById('turn-indicator');
     if(myRole === 'dealer') { indicator.innerText = "กำลังเล่น..."; return; }
     
-    // ถ้า ID ตรงกับเรา -> ปลดล็อค
     if(turnId === myId) {
         controls.classList.remove('disabled');
         indicator.innerText = "🟢 ตาของคุณ!";
