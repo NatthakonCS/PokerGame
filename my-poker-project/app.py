@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request
-from flask_socketio import SocketIO, emit, join_room
+from flask_socketio import SocketIO, emit, join_room, leave_room
 import random
 
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -12,19 +12,24 @@ rooms = {}
 def index():
     return app.send_static_file('index.html')
 
+# --- Logic หาคนถัดไป (แก้ไขใหม่ให้แม่นยำขึ้น) ---
 def get_next_turn(room, current_idx):
     players = room['players']
     count = len(players)
     if count == 0: return -1
     
-    next_idx = (current_idx + 1) % count
-    start_idx = next_idx
+    # เริ่มเช็คจากคนถัดไป
+    check_idx = (current_idx + 1) % count
     
-    while players[next_idx]['status'] == 'folded' or players[next_idx]['role'] == 'dealer':
-        next_idx = (next_idx + 1) % count
-        if next_idx == start_idx: return -1 
+    # วนลูปจนกว่าจะเจอคนที่เล่นได้ (ไม่หมอบ และ ไม่ใช่ Dealer)
+    # วนสูงสุดเท่าจำนวนคน เพื่อป้องกัน Loop ไม่รู้จบ
+    for _ in range(count):
+        p = players[check_idx]
+        if p['status'] != 'folded' and p['role'] != 'dealer':
+            return check_idx
+        check_idx = (check_idx + 1) % count
             
-    return next_idx
+    return -1 # กรณีไม่เหลือใครเล่นแล้ว
 
 @socketio.on('create_room')
 def create_room(data):
@@ -48,7 +53,7 @@ def create_room(data):
         'status': 'dealer_only', 
         'chip': 0,
         'roundBet': 0,
-        'totalBet': 0 # ยอดรวมที่ลงไปทั้งเกม (สำหรับสรุปตอนแพ้)
+        'totalBet': 0
     })
     emit('room_created', {'roomId': room_id, 'isHost': True})
     socketio.emit('update_players', rooms[room_id]['players'], room=room_id)
@@ -72,22 +77,51 @@ def on_join(data):
     else:
         emit('error_msg', 'ไม่พบห้องนี้')
 
+# --- ฟีเจอร์เตะคน (Kick Player) ---
+@socketio.on('kick_player')
+def kick_player(data):
+    room_id = data['roomId']
+    target_id = data['targetId']
+    
+    if room_id in rooms:
+        room = rooms[room_id]
+        # ตรวจสอบว่าคนกดเตะคือ Host จริงไหม
+        if request.sid != room['host']:
+            return
+        
+        # หาชื่อคนโดนเตะ เพื่อแจ้งเตือน
+        target_player = next((p for p in room['players'] if p['id'] == target_id), None)
+        
+        # ลบออกจาก List
+        room['players'] = [p for p in room['players'] if p['id'] != target_id]
+        
+        # สั่งให้ Socket นั้นออกจากห้อง
+        socketio.emit('kicked', room=target_id) # ส่ง event ไปหาคนโดนเตะเฉพาะตัว
+        
+        # อัปเดตรายชื่อให้คนในห้องเห็น
+        socketio.emit('update_players', room['players'], room=room_id)
+
 @socketio.on('start_game')
 def start_game(room_id):
     if room_id not in rooms: return
     room = rooms[room_id]
     players = room['players']
     active_players = [p for p in players if p['role'] == 'player']
+    
     if len(active_players) < 2: return 
 
+    # รีเซ็ตค่าเริ่มต้น
     for p in players:
         if p['role'] == 'player':
             p['status'] = 'active'
             p['roundBet'] = 0
-            p['totalBet'] = 0 # รีเซ็ตยอดเสียเมื่อเริ่มเกมใหม่
+            p['totalBet'] = 0
 
+    # สุ่ม Big Blind
     bb_player = random.choice(active_players)
     room['bigBlindPlayer'] = bb_player['id']
+    
+    # หา Index ของ Big Blind เพื่อเริ่มเล่นที่คนนี้
     bb_index = next((i for i, p in enumerate(players) if p['id'] == bb_player['id']), 0)
     
     room['turnIndex'] = bb_index
@@ -108,14 +142,21 @@ def place_bet(data):
     room_id = data['roomId']
     if room_id not in rooms: return
     room = rooms[room_id]
+    
+    # ป้องกัน Index Out of Range
+    if room['turnIndex'] >= len(room['players']):
+        room['turnIndex'] = 0
+        
     current_player = room['players'][room['turnIndex']]
 
+    # Security Check: ใช่ตาของคนนี้จริงไหม?
     if request.sid != current_player['id']: return
 
     amount = int(data['amount'])
     action = data['action']
     msg = ""
     
+    # --- Logic Action ---
     if action == 'fold':
         current_player['status'] = 'folded'
         msg = f"{current_player['name']} หมอบ (Fold) 🏳️"
@@ -128,33 +169,43 @@ def place_bet(data):
         if diff > 0:
             room['pot'] += diff
             current_player['roundBet'] += diff
-            current_player['totalBet'] += diff # สะสมยอดเสีย
+            current_player['totalBet'] += diff
             amount = diff
         msg = f"{current_player['name']} ตาม (Call) {amount} 💰"
 
     elif action == 'bet':
         room['pot'] += amount
         current_player['roundBet'] += amount
-        current_player['totalBet'] += amount # สะสมยอดเสีย
+        current_player['totalBet'] += amount
+        
+        # ถ้าลงมากกว่าสูงสุดเดิม ให้ update
         if current_player['roundBet'] > room['highestBet']:
             room['highestBet'] = current_player['roundBet']
         msg = f"{current_player['name']} ลงเพิ่ม {amount} 💰"
 
+    # นับจำนวนคนเล่นในรอบ
     room['actionsCount'] += 1
-    active_players_count = len([p for p in room['players'] if p['role'] == 'player' and p['status'] != 'folded'])
-
+    
+    # หาคนถัดไปทันที
     next_idx = get_next_turn(room, room['turnIndex'])
-    next_id = room['players'][next_idx]['id'] if next_idx != -1 else None
+    
+    if next_idx != -1:
+        room['turnIndex'] = next_idx
+        next_id = room['players'][next_idx]['id']
+    else:
+        next_id = None # จบเกม หรือ เหลือคนเดียว
 
+    # เช็คว่าควรเตือน Dealer ไหม
     dealer_alert = False
+    active_players_count = len([p for p in room['players'] if p['role'] == 'player' and p['status'] != 'folded'])
     if room['actionsCount'] >= active_players_count:
         dealer_alert = True
-        room['actionsCount'] = 0
+        room['actionsCount'] = 0 
 
     socketio.emit('update_game_state', {
         'pot': room['pot'],
         'lastActionMsg': msg,
-        'currentTurn': next_id,
+        'currentTurn': next_id, # ส่ง ID คนถัดไป เพื่อปลดล็อคปุ่ม
         'highestBet': room['highestBet'],
         'dealerAlert': dealer_alert,
         'playersData': room['players']
@@ -171,7 +222,6 @@ def update_card(data):
 def end_game(data):
     room_id = data['roomId']
     if room_id in rooms:
-        # ส่งข้อมูลผู้เล่นทั้งหมดไปด้วย เพื่อให้ client รู้ว่าใครเสียเท่าไหร่
         socketio.emit('game_over', {
             'winnerId': data['winnerId'],
             'pot': rooms[room_id]['pot'],
