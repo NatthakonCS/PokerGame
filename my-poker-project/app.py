@@ -7,20 +7,27 @@ app = Flask(__name__, static_folder='public', static_url_path='')
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# เก็บข้อมูลห้อง (ใช้ Dict ในหน่วยความจำ)
 rooms = {}
 
-# Route สำหรับหน้าเว็บ
 @app.route('/')
 def index():
-    # ให้ชี้ไปที่ไฟล์ index.html ในโฟลเดอร์ public
     return app.send_static_file('index.html')
 
-# === Socket Events ===
-
-@socketio.on('connect')
-def handle_connect():
-    print(f'User connected: {request.sid}')
+# Helper: หาคนเล่นคนถัดไป (ข้าม Dealer และ คนหมอบ)
+def get_next_turn(room, current_idx):
+    players = room['players']
+    count = len(players)
+    next_idx = (current_idx + 1) % count
+    
+    # วนลูปหาคนถัดไปที่สถานะ active และไม่ใช่ dealer
+    # ป้องกัน Infinite loop ด้วยการเช็คว่าวนกลับมาที่เดิมไหม
+    start_idx = next_idx
+    while players[next_idx]['status'] == 'folded' or players[next_idx]['role'] == 'dealer':
+        next_idx = (next_idx + 1) % count
+        if next_idx == start_idx: # กรณีเหลือคนเดียว หรือไม่มีใครเล่นได้
+            return -1 
+            
+    return next_idx
 
 @socketio.on('create_room')
 def create_room(data):
@@ -31,15 +38,16 @@ def create_room(data):
         'pot': 0,
         'communityCards': [None]*5,
         'gameStatus': 'waiting',
-        'turnIndex': 0,
+        'turnIndex': -1,
         'bigBlindPlayer': None
     }
     join_room(room_id)
-    # เพิ่ม Host
+    # Host คือ Dealer (status: 'dealer_only') ไม่นับว่าเป็นผู้เล่นที่ลงเงินได้
     rooms[room_id]['players'].append({
         'id': request.sid,
         'name': data['name'],
-        'role': 'host',
+        'role': 'dealer',
+        'status': 'dealer_only', 
         'chip': 0
     })
     
@@ -51,10 +59,12 @@ def on_join(data):
     room_id = data['roomId']
     if room_id in rooms:
         join_room(room_id)
+        # คน join คือ Player (status: 'active')
         rooms[room_id]['players'].append({
             'id': request.sid,
             'name': data['name'],
             'role': 'player',
+            'status': 'active',
             'chip': 0
         })
         emit('room_joined', {'roomId': room_id, 'isHost': False})
@@ -67,38 +77,77 @@ def start_game(room_id):
     if room_id not in rooms: return
     room = rooms[room_id]
     
-    # สุ่ม Big Blind
-    idx = random.randint(0, len(room['players']) - 1)
-    room['bigBlindPlayer'] = room['players'][idx]['id']
-    room['turnIndex'] = idx
+    players = room['players']
+    active_players = [p for p in players if p['role'] == 'player']
+    
+    if len(active_players) < 2:
+        return # ต้องมีผู้เล่นอย่างน้อย 2 คน (ไม่รวม Dealer)
+
+    # Reset Status ของผู้เล่นทุกคนให้เป็น active
+    for p in players:
+        if p['role'] == 'player':
+            p['status'] = 'active'
+
+    # สุ่ม Big Blind จากคนที่เป็น Player เท่านั้น
+    bb_player = random.choice(active_players)
+    room['bigBlindPlayer'] = bb_player['id']
+    
+    # หา Index ของ Big Blind ใน list หลัก
+    bb_index = next((i for i, p in enumerate(players) if p['id'] == bb_player['id']), 0)
+    
+    room['turnIndex'] = bb_index
     room['gameStatus'] = 'playing'
     room['pot'] = 0
     room['communityCards'] = [None]*5
     
     socketio.emit('game_started', {
         'bigBlindId': room['bigBlindPlayer'],
-        'players': room['players']
+        'players': room['players'],
+        'turnIndex': room['turnIndex']
     }, room=room_id)
 
 @socketio.on('place_bet')
 def place_bet(data):
     room_id = data['roomId']
+    if room_id not in rooms: return
+    
+    room = rooms[room_id]
+    current_player = room['players'][room['turnIndex']]
+
+    # 1. เช็คว่าใช่ตาตัวเองจริงๆ ไหม (Server Validation)
+    if request.sid != current_player['id']:
+        return # ถ้าไม่ใช่ตาตัวเอง อย่าทำอะไร
+
     amount = int(data['amount'])
     action = data['action']
     
-    if room_id not in rooms: return
-    room = rooms[room_id]
-    
+    # Update Pot
     if amount > 0:
         room['pot'] += amount
-        
-    # วน Turn
-    room['turnIndex'] = (room['turnIndex'] + 1) % len(room['players'])
-    
+
+    # Handle Actions
+    msg = ""
+    if action == 'fold':
+        current_player['status'] = 'folded'
+        msg = f"{current_player['name']} หมอบแล้ว (Fold) 🏳️"
+    elif action == 'check':
+        msg = f"{current_player['name']} ผ่าน (Check)"
+    elif action == 'bet':
+        msg = f"{current_player['name']} ลงเงิน {amount} ชิป 💰"
+
+    # หาตาคนถัดไป
+    next_idx = get_next_turn(room, room['turnIndex'])
+    if next_idx != -1:
+        room['turnIndex'] = next_idx
+        next_id = room['players'][next_idx]['id']
+    else:
+        # กรณีเหลือคนเดียวชนะเลย (อาจจะเพิ่ม logic นี้ทีหลัง)
+        next_id = None
+
     socketio.emit('update_game_state', {
         'pot': room['pot'],
-        'lastAction': {'player': request.sid, 'action': action, 'amount': amount},
-        'currentTurn': room['players'][room['turnIndex']]['id']
+        'lastActionMsg': msg,
+        'currentTurn': next_id
     }, room=room_id)
 
 @socketio.on('update_card')
