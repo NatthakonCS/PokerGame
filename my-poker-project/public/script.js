@@ -1,5 +1,14 @@
-// แก้จาก const socket = io(); เป็นบรรทัดข้างล่างนี้:
-const socket = io({transports: ['websocket'], upgrade: false});
+// แก้ไขการเชื่อมต่อสำหรับ Render
+const socket = io(window.location.origin, {
+    transports: ['websocket', 'polling'], 
+    upgrade: false
+});
+
+// เช็คว่าเชื่อมต่อได้จริงไหม (ดูใน Console)
+socket.on('connect', () => {
+    console.log("เชื่อมต่อ Server สำเร็จ! ID:", socket.id);
+    alert("เชื่อมต่อ Server ได้แล้ว! เล่นได้เลย"); // เด้งเตือนให้รู้ว่าผ่าน
+});
 
 let myId = '';
 let myName = '';
