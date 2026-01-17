@@ -36,6 +36,11 @@
     </div>
 
     <div id="game-screen" class="screen hidden">
+        <div id="dealer-alert-box" class="hidden" style="position:absolute; top:15%; left:10%; right:10%; background:rgba(231, 76, 60, 0.9); padding:15px; border-radius:10px; z-index:150; border:2px solid white; animation: blink 1s infinite;">
+            <h3 style="margin:0;">🔔 ผู้เล่นครบวงแล้ว!</h3>
+            <p style="margin:5px 0 0 0;">Dealer โปรดเปิดไพ่ใบถัดไป</p>
+        </div>
+
         <div id="big-blind-announce" class="hidden" style="position:absolute; top:40%; left:0; right:0; font-size:40px; color:gold; text-shadow:2px 2px 0 #000; z-index:100;">
             BIG BLIND!
         </div>
@@ -65,11 +70,15 @@
                 <button onclick="selectChip(7)" class="chip-btn chip-7">7</button>
                 <button onclick="selectChip(10)" class="chip-btn chip-10">10</button>
             </div>
-            <p id="selected-bet" style="color:gold; margin:5px;">ยอดที่เลือก: 0</p>
+            <p id="selected-bet" style="color:gold; margin:5px;">ยอดที่เพิ่ม: 0</p>
+            
             <div class="action-buttons">
                 <button onclick="submitAction('fold')" class="action-btn btn-fold">หมอบ</button>
-                <button onclick="submitAction('check')" class="action-btn btn-check">ผ่าน</button>
-                <button onclick="submitAction('bet')" class="action-btn btn-bet">ลงเงิน</button>
+                
+                <button id="btn-check" onclick="submitAction('check')" class="action-btn btn-check">ผ่าน (Check)</button>
+                <button id="btn-call" onclick="submitAction('call')" class="action-btn btn-call hidden" style="background-color:#9b59b6;">ตาม <span id="call-amount-display"></span></button>
+                
+                <button onclick="submitAction('bet')" class="action-btn btn-bet">ลงเพิ่ม</button>
             </div>
         </div>
 
@@ -101,22 +110,28 @@
         </div>
     </div>
 
-    <div id="payment-screen" class="screen hidden">
+    <div id="payment-screen" class="screen hidden" style="background:#2c3e50;">
         <div id="winner-view" class="hidden">
-            <h1 style="color:#f1c40f">ยินดีด้วยคุณชนะ! 🎉</h1>
-            <h2>รับเงิน: <span id="win-amount"></span></h2>
-            <input type="text" id="pp-id" placeholder="เบอร์ PromptPay" style="padding:10px; font-size:18px;">
+            <h1 style="color:#2ecc71">🎉 คุณชนะ! 🎉</h1>
+            <h2>ยอดที่ได้รับ: <span id="win-amount" style="font-size:40px; color:gold;"></span></h2>
+            <br>
+            <p>กรอก PromptPay เพื่อสร้าง QR Code</p>
+            <input type="text" id="pp-id" placeholder="เบอร์โทร / เลข ปชช." style="padding:15px; font-size:20px; width:80%; text-align:center;">
             <br><br>
-            <button onclick="generateQR()" class="action-btn btn-bet">สร้าง QR Code</button>
+            <button onclick="generateQR()" class="action-btn btn-bet" style="width:80%">สร้าง QR Code รับเงิน</button>
             <div id="qr-display" style="margin-top:20px;"></div>
         </div>
+
         <div id="loser-view" class="hidden">
-            <h1>จบเกม</h1>
-            <p>ผู้ชนะคือ: <span id="winner-name-display" style="font-weight:bold; color:#f1c40f;"></span></p>
-            <div id="loser-qr-display" style="margin-top:20px;"></div>
+            <h1 style="color:#e74c3c">จบเกม</h1>
+            <h2 style="color:white;">ผู้ชนะคือ: <span id="winner-name-display" style="color:gold;"></span></h2>
+            <h3>เสียเงินในกองกลาง</h3>
+            <div id="loser-qr-display" style="margin-top:20px; background:white; padding:10px; border-radius:10px; display:none;">
+                </div>
         </div>
+
         <br><br>
-        <button id="reset-btn" onclick="resetGame()" class="hidden action-btn btn-check" style="width:100%">เริ่มรอบใหม่ (Reset)</button>
+        <button id="reset-btn" onclick="resetGame()" class="hidden action-btn btn-check" style="width:80%; margin-top:30px;">เริ่มรอบใหม่ (Reset)</button>
     </div>
 
     <script src="script.js"></script>
