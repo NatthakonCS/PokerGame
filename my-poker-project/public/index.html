@@ -3,56 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Poker Assistant</title>
+    <title>VIP Poker Room</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
 <body>
 
     <div id="login-screen" class="screen">
-        <h1>♠️ Poker Room ♥️</h1>
-        <br>
-        <input type="text" id="username" placeholder="ชื่อเล่นของคุณ" style="padding:10px; font-size:16px;">
-        <br><br>
-        <button onclick="createRoom()" class="action-btn btn-bet" style="width:80%">สร้างห้อง (สำหรับ Dealer)</button>
-        <br><br>
-        <div style="background:rgba(255,255,255,0.1); padding:15px; border-radius:10px;">
-            <input type="number" id="room-code-input" placeholder="เลขห้อง 4 หลัก" style="padding:10px; font-size:16px;">
-            <button onclick="joinRoom()" class="action-btn btn-check">เข้าร่วมห้อง</button>
+        <div class="glass-panel" style="margin-top: 10vh;">
+            <h1 style="font-size: 40px;">♣️ VIP POKER ♦️</h1>
+            <p style="color:#bdc3c7;">ระบบจัดการชิปออนไลน์</p>
+            <br>
+            <input type="text" id="username" placeholder="ใส่ชื่อเล่นของคุณ">
+            <br><br>
+            <button onclick="createRoom()" class="action-btn btn-primary">👑 สร้างห้อง (Dealer)</button>
+            <div style="display:flex; gap:10px; align-items:center; margin-top:20px;">
+                <input type="number" id="room-code-input" placeholder="เลขห้อง" style="margin:0; width:60%;">
+                <button onclick="joinRoom()" class="action-btn btn-info" style="margin:0; width:40%;">เข้าร่วม</button>
+            </div>
         </div>
     </div>
 
     <div id="lobby-screen" class="screen hidden">
-        <h2>ห้อง: <span id="display-room-id" style="color:#f1c40f"></span></h2>
-        <div id="player-list-container">
-            <h3>รายชื่อผู้เข้าห้อง:</h3>
-            <ul id="player-list" style="text-align:left; display:inline-block;"></ul>
+        <div class="glass-panel">
+            <h2>Room ID: <span id="display-room-id" class="gold-text"></span></h2>
+            <hr style="border-color:rgba(255,255,255,0.2);">
+            <div style="text-align: left; padding: 10px;">
+                <h3 style="color:#bdc3c7;">ผู้เล่นในห้อง:</h3>
+                <ul id="player-list" style="list-style: none; padding: 0; font-size: 18px;"></ul>
+            </div>
+            <div id="host-controls" class="hidden">
+                <button onclick="startGame()" class="action-btn btn-success">🟢 เริ่มเกม</button>
+            </div>
+            <p id="waiting-msg" style="color:#bdc3c7;">รอ Dealer เริ่มเกม...</p>
         </div>
-        <div id="host-controls" class="hidden">
-            <br>
-            <button onclick="startGame()" class="action-btn btn-bet" style="width:100%">เริ่มเกม (Dealer กด)</button>
-        </div>
-        <p id="waiting-msg">รอ Dealer เริ่มเกม...</p>
     </div>
 
     <div id="game-screen" class="screen hidden">
-        <div id="dealer-alert-box" class="hidden" style="position:absolute; top:15%; left:10%; right:10%; background:rgba(231, 76, 60, 0.9); padding:15px; border-radius:10px; z-index:150; border:2px solid white; animation: blink 1s infinite;">
-            <h3 style="margin:0;">🔔 ผู้เล่นครบวงแล้ว!</h3>
-            <p style="margin:5px 0 0 0;">Dealer โปรดเปิดไพ่ใบถัดไป</p>
+        <div id="big-blind-announce" class="modal-overlay hidden">
+            <h1 class="gold-text" style="font-size:50px;">BIG BLIND</h1>
+            <h2 id="bb-name" style="color:white;"></h2>
         </div>
 
-        <div id="big-blind-announce" class="hidden" style="position:absolute; top:40%; left:0; right:0; font-size:40px; color:gold; text-shadow:2px 2px 0 #000; z-index:100;">
-            BIG BLIND!
+        <div id="dealer-alert-box" class="glass-panel hidden" style="border:2px solid #e74c3c; background: rgba(192, 57, 43, 0.2);">
+            <h3 class="gold-text">🔔 แจ้งเตือน Dealer</h3>
+            <p>ผู้เล่นครบวงแล้ว! เปิดไพ่ใบถัดไปได้เลย</p>
         </div>
 
-        <div class="top-bar">
-            <div>กองกลาง (Pot): <span id="pot-amount">0</span></div>
-            <div id="turn-indicator">รอเริ่ม...</div>
+        <div class="glass-panel" style="padding: 10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>POT: <span id="pot-amount" class="gold-text" style="font-size:24px;">0</span></div>
+                <div id="turn-indicator" style="font-size:14px;">รอเริ่ม...</div>
+            </div>
+            <div id="action-log" class="status-bar">ยินดีต้อนรับสู่โต๊ะ Poker</div>
         </div>
 
-        <div id="action-log">เกมกำลังจะเริ่ม...</div>
-
-        <div class="table-area">
+        <div class="poker-table">
+            <div style="color:rgba(255,255,255,0.5); font-size:12px; margin-bottom:5px;">Community Cards</div>
             <div class="cards-container">
                 <div class="card-slot" onclick="dealerClickCard(0)">?</div>
                 <div class="card-slot" onclick="dealerClickCard(1)">?</div>
@@ -62,76 +69,75 @@
             </div>
         </div>
 
-        <div id="player-controls" class="control-panel">
-            <div id="chip-selector" class="chips">
-                <button onclick="selectChip(1)" class="chip-btn chip-1">1</button>
-                <button onclick="selectChip(3)" class="chip-btn chip-3">3</button>
-                <button onclick="selectChip(5)" class="chip-btn chip-5">5</button>
-                <button onclick="selectChip(7)" class="chip-btn chip-7">7</button>
-                <button onclick="selectChip(10)" class="chip-btn chip-10">10</button>
+        <div id="player-controls" class="glass-panel">
+            <p id="selected-bet" style="color:#f1c40f; margin-bottom:10px;">ยอดที่จะเพิ่ม: 0</p>
+            <div class="chips-row">
+                <div class="chip-btn chip-1" onclick="selectChip(1)">1</div>
+                <div class="chip-btn chip-3" onclick="selectChip(3)">3</div>
+                <div class="chip-btn chip-5" onclick="selectChip(5)">5</div>
+                <div class="chip-btn chip-7" onclick="selectChip(7)">7</div>
+                <div class="chip-btn chip-10" onclick="selectChip(10)">10</div>
             </div>
-            <p id="selected-bet" style="color:gold; margin:5px;">ยอดที่เพิ่ม: 0</p>
+            <div style="display:flex; gap:10px; margin-top:15px;">
+                <button onclick="submitAction('fold')" class="action-btn btn-danger">หมอบ</button>
+                <button id="btn-check" onclick="submitAction('check')" class="action-btn btn-secondary">ผ่าน</button>
+                <button id="btn-call" onclick="submitAction('call')" class="action-btn btn-info hidden">ตาม</button>
+                <button onclick="submitAction('bet')" class="action-btn btn-success">ลงเพิ่ม</button>
+            </div>
+        </div>
+
+        <div id="dealer-controls" class="glass-panel hidden">
+            <h3 class="gold-text">👮‍♂️ Dealer Area</h3>
+            <p>กดที่ไพ่เพื่อเปิด • คุมเกมให้ราบรื่น</p>
+            <button onclick="openWinnerModal()" class="action-btn btn-primary">🏆 จบเกม / เลือกผู้ชนะ</button>
+        </div>
+    </div>
+
+    <div id="payment-screen" class="screen hidden">
+        <div class="glass-panel" style="text-align:center; padding:30px;">
             
-            <div class="action-buttons">
-                <button onclick="submitAction('fold')" class="action-btn btn-fold">หมอบ</button>
-                
-                <button id="btn-check" onclick="submitAction('check')" class="action-btn btn-check">ผ่าน (Check)</button>
-                <button id="btn-call" onclick="submitAction('call')" class="action-btn btn-call hidden" style="background-color:#9b59b6;">ตาม <span id="call-amount-display"></span></button>
-                
-                <button onclick="submitAction('bet')" class="action-btn btn-bet">ลงเพิ่ม</button>
+            <div id="winner-view" class="hidden">
+                <h1 class="gold-text" style="font-size:36px;">🎉 YOU WIN! 🎉</h1>
+                <p>ยอด Pot ทั้งหมด: <span id="win-amount" class="accent-text" style="font-size:24px;"></span></p>
+                <hr style="border-color:rgba(255,255,255,0.2); margin:20px 0;">
+                <p>กรอก PromptPay รับเงิน (QR แบบไม่ระบุยอด)</p>
+                <input type="text" id="pp-id" placeholder="เบอร์โทร / เลข ปชช.">
+                <button onclick="generateQR()" class="action-btn btn-success">สร้าง QR Code</button>
+                <div id="qr-display" style="margin-top:20px;"></div>
             </div>
-        </div>
 
-        <div id="dealer-controls" class="hidden">
-            <div class="dealer-msg">คุณคือ Dealer 👮‍♂️<br>มีหน้าที่เปิดไพ่และคุมเกม</div>
-            <br>
-            <button onclick="openWinnerModal()" class="action-btn btn-fold" style="width:100%">จบเกม / เลือกผู้ชนะ</button>
-        </div>
-    </div>
-
-    <div id="card-modal" class="hidden" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); display:flex; justify-content:center; align-items:center;">
-        <div style="background:white; padding:20px; border-radius:10px; color:black;">
-            <h3>เลือกไพ่</h3>
-            <select id="card-rank" style="font-size:20px; padding:5px;"><option value="A">A</option><option value="K">K</option><option value="Q">Q</option><option value="J">J</option><option value="10">10</option><option value="9">9</option><option value="8">8</option><option value="7">7</option><option value="6">6</option><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option></select>
-            <select id="card-suit" style="font-size:20px; padding:5px;"><option value="♠">♠ โพดำ</option><option value="♥">♥ โพแดง</option><option value="♣">♣ ดอกจิก</option><option value="♦">♦ ข้าวหลามตัด</option></select>
-            <br><br>
-            <button onclick="confirmCard()" class="action-btn btn-bet">ตกลง</button>
-            <button onclick="closeModal('card-modal')" class="action-btn btn-fold">ยกเลิก</button>
-        </div>
-    </div>
-
-    <div id="winner-modal" class="hidden" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); display:flex; justify-content:center; align-items:center;">
-        <div style="background:white; padding:20px; border-radius:10px; color:black;">
-            <h3>เลือกผู้ชนะ</h3>
-            <select id="winner-select" style="font-size:18px; padding:5px; width:100%"></select>
-            <br><br>
-            <button onclick="confirmWinner()" class="action-btn btn-bet">ยืนยัน</button>
-            <button onclick="closeModal('winner-modal')" class="action-btn btn-fold">ยกเลิก</button>
-        </div>
-    </div>
-
-    <div id="payment-screen" class="screen hidden" style="background:#2c3e50;">
-        <div id="winner-view" class="hidden">
-            <h1 style="color:#2ecc71">🎉 คุณชนะ! 🎉</h1>
-            <h2>ยอดที่ได้รับ: <span id="win-amount" style="font-size:40px; color:gold;"></span></h2>
-            <br>
-            <p>กรอก PromptPay เพื่อสร้าง QR Code</p>
-            <input type="text" id="pp-id" placeholder="เบอร์โทร / เลข ปชช." style="padding:15px; font-size:20px; width:80%; text-align:center;">
-            <br><br>
-            <button onclick="generateQR()" class="action-btn btn-bet" style="width:80%">สร้าง QR Code รับเงิน</button>
-            <div id="qr-display" style="margin-top:20px;"></div>
-        </div>
-
-        <div id="loser-view" class="hidden">
-            <h1 style="color:#e74c3c">จบเกม</h1>
-            <h2 style="color:white;">ผู้ชนะคือ: <span id="winner-name-display" style="color:gold;"></span></h2>
-            <h3>เสียเงินในกองกลาง</h3>
-            <div id="loser-qr-display" style="margin-top:20px; background:white; padding:10px; border-radius:10px; display:none;">
+            <div id="loser-view" class="hidden">
+                <h1 style="color:#e74c3c;">จบเกม</h1>
+                <h3 style="margin-bottom:5px;">ผู้ชนะคือ: <span id="winner-name-display" class="gold-text"></span></h3>
+                <div style="background:rgba(231, 76, 60, 0.2); border:1px solid #e74c3c; border-radius:10px; padding:15px; margin-top:20px;">
+                    <p style="margin:0; font-size:14px; color:#ffcccc;">คุณเสียเงินในรอบนี้ไปทั้งหมด</p>
+                    <h1 id="my-loss-amount" style="font-size:48px; margin:5px 0;">0</h1>
+                    <p style="margin:0; font-size:14px;">บาท</p>
                 </div>
-        </div>
+                <p style="margin-top:20px; color:#bdc3c7;">กรุณาสแกนจ่ายให้ผู้ชนะ</p>
+            </div>
 
-        <br><br>
-        <button id="reset-btn" onclick="resetGame()" class="hidden action-btn btn-check" style="width:80%; margin-top:30px;">เริ่มรอบใหม่ (Reset)</button>
+            <button id="reset-btn" onclick="resetGame()" class="action-btn btn-info hidden" style="margin-top:30px;">🔄 เล่นรอบต่อไป</button>
+        </div>
+    </div>
+
+    <div id="card-modal" class="modal-overlay hidden">
+        <div class="modal-box">
+            <h3>เลือกไพ่</h3>
+            <select id="card-rank" style="width:100%; padding:10px; margin-bottom:10px; font-size:18px;"><option value="A">A</option><option value="K">K</option><option value="Q">Q</option><option value="J">J</option><option value="10">10</option><option value="9">9</option><option value="8">8</option><option value="7">7</option><option value="6">6</option><option value="5">5</option><option value="4">4</option><option value="3">3</option><option value="2">2</option></select>
+            <select id="card-suit" style="width:100%; padding:10px; margin-bottom:20px; font-size:18px;"><option value="♠">♠ โพดำ</option><option value="♥">♥ โพแดง</option><option value="♣">♣ ดอกจิก</option><option value="♦">♦ ข้าวหลามตัด</option></select>
+            <button onclick="confirmCard()" class="action-btn btn-success">ตกลง</button>
+            <button onclick="closeModal('card-modal')" class="action-btn btn-danger">ยกเลิก</button>
+        </div>
+    </div>
+
+    <div id="winner-modal" class="modal-overlay hidden">
+        <div class="modal-box">
+            <h3>เลือกผู้ชนะ</h3>
+            <select id="winner-select" style="width:100%; padding:10px; margin-bottom:20px; font-size:18px;"></select>
+            <button onclick="confirmWinner()" class="action-btn btn-success">ยืนยัน</button>
+            <button onclick="closeModal('winner-modal')" class="action-btn btn-danger">ยกเลิก</button>
+        </div>
     </div>
 
     <script src="script.js"></script>
